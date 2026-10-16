@@ -2,12 +2,12 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
 # The database URL. For now a local SQLite file called logdog.db
-SQLALCHEMY_DATABAS_URL = "sqlite:///./logdog.db"
+SQLALCHEMY_DATABASE_URL = "sqlite:///./logdog.db"
 
 # The engine is the core connection to the database.
 # connect_args is a SQLite-specific setting we need for FastAPI.
 engine = create_engine(
-    SQLALCHEMY_DATABAS_URL,
+    SQLALCHEMY_DATABASE_URL,
     connect_args={"check_same_thread": False},
 )
 

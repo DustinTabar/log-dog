@@ -3,6 +3,10 @@ from sqlalchemy.orm import relationship
 
 from app.database import Base
 
+from datetime import date
+
+
+
 class User(Base):
     __tablename__ = "users"
 
@@ -34,7 +38,7 @@ class Completion(Base):
     __tablename__ = "completions"
 
     id = Column(Integer, primary_key=True, index=True)
-    completed_date = Column(Date, nullable=False, server_default=func.now())
+    completed_date = Column(Date, nullable=False, default=date.today)
 
     task_id = Column(Integer, ForeignKey("tasks.id"), nullable=False)
 

@@ -17,6 +17,10 @@ def read_root():
 def health_check():
     return {"status": "ok"}
 
+@app.get("/tasks", response_model=list[schemas.TaskRead])
+def list_tasks(db: Session = Depends(get_db)):
+    return db.query(models.Task).all()
+
 @app.post("/tasks", response_model=schemas.TaskRead, status_code=201)
 def create_task(task: schemas.TaskCreate, db: Session=Depends(get_db)):
     new_task = models.Task(
@@ -29,13 +33,21 @@ def create_task(task: schemas.TaskCreate, db: Session=Depends(get_db)):
     db.refresh(new_task)
     return new_task
 
-@app.get("/tasks", response_model=list[schemas.TaskRead])
-def list_tasks(db: Session = Depends(get_db)):
-    return db.query(models.Task).all()
+@app.post("/tasks/{task_id}/complete", response_model=schemas.CompletionRead, status_code=201)
+def complete_task(task_id: int, db: Session = Depends(get_db)):
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    completion = models.Completion(task_id=task.id)
+    db.add(completion)
+    db.commit()
+    db.refresh(completion)
+    return completion
 
 @app.delete("/tasks/{task_id}", status_code=204)
 def delete_task(task_id: int, db: Session = Depends(get_db)):
-    task = db.query(models.Task.filter(models.Task.id == task_id). first())
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
     db.delete(task)

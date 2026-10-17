@@ -1,18 +1,30 @@
-from datetime import datetime, date
+from datetime import date, datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from app.streaks import INTERVALS
+
 
 class TaskCreate(BaseModel):
     title: str
-    frequency_type: str = "daily"
+    interval: str = "day"
+
+    @field_validator("interval")
+    @classmethod
+    def check_interval(cls, value: str) -> str:
+        if value not in INTERVALS:
+            raise ValueError(f"interval must be one of: {', '.join(INTERVALS)}")
+        return value
+
 
 class TaskRead(BaseModel):
     id: int
     title: str
-    frequency_type: str
+    interval: str
     created_at: datetime
 
     model_config = {"from_attributes": True}
+
 
 class CompletionRead(BaseModel):
     id: int
@@ -20,4 +32,9 @@ class CompletionRead(BaseModel):
     task_id: int
 
     model_config = {"from_attributes": True}
-    
+
+
+class TaskStats(BaseModel):
+    task_id: int
+    streak: int
+    period_count: int

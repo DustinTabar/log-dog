@@ -1,8 +1,10 @@
 from fastapi import FastAPI, Depends, HTTPException
 from sqlalchemy.orm import Session
-
 from app import models, schemas
 from app.database import engine, get_db
+from datetime import date
+from app.streaks import calculate_stats
+
 
 # Create any tables that don't exist yet
 models.Base.metadata.create_all(bind=engine)
@@ -25,7 +27,7 @@ def list_tasks(db: Session = Depends(get_db)):
 def create_task(task: schemas.TaskCreate, db: Session=Depends(get_db)):
     new_task = models.Task(
         title=task.title,
-        frequency_type=task.frequency_type,
+        interval=task.interval,
         user_id=1 # temp until auth exists in phase 5
     )
     db.add(new_task)
@@ -38,7 +40,6 @@ def complete_task(task_id: int, db: Session = Depends(get_db)):
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if task is None:
         raise HTTPException(status_code=404, detail="Task not found")
-
     completion = models.Completion(task_id=task.id)
     db.add(completion)
     db.commit()
@@ -53,3 +54,17 @@ def delete_task(task_id: int, db: Session = Depends(get_db)):
     db.delete(task)
     db.commit()
     return None
+
+@app.get("/tasks/{task_id}/stats", response_model=schemas.TaskStats)
+def get_task_stats(task_id: int, db: Session = Depends(get_db)):
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if task is None:
+        raise HTTPException(status_code=404, detail="Task not found")
+
+    rows = db.query(models.Completion.completed_date).filter(
+        models.Completion.task_id == task.id
+    ).all()
+    dates = [row.completed_date for row in rows]
+
+    streak, period_count = calculate_stats(dates, task.interval, date.today())
+    return {"task_id": task.id, "streak": streak, "period_count": period_count}

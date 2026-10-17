@@ -1,6 +1,7 @@
 from sqlalchemy import create_engine
 from sqlalchemy.orm import declarative_base, sessionmaker
 
+
 # The database URL. For now a local SQLite file called logdog.db
 SQLALCHEMY_DATABASE_URL = "sqlite:///./logdog.db"
 

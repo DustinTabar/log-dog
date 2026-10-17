@@ -1,6 +1,6 @@
 # Log Dog 🐕
 
-A habit tracker and to-do app where your streak grows a dachshund. The more days in a row you show up, the longer the dog gets.
+A habit tracker and to-do app where your streak grows a dachshund. The more intervals in a row you show up, the longer the dog gets.
 
 Log Dog is a learning project for full stack development: a Python API, a React frontend, a real database, user login, containerization, and online hosting. The code is typed out by hand on purpose, so every line gets read at least once.
 
@@ -14,23 +14,26 @@ Log Dog is a learning project for full stack development: a Python API, a React 
 4. [Running it locally](#running-it-locally)
 5. [Data model](#data-model)
 6. [API endpoints](#api-endpoints)
-7. [Design decisions](#design-decisions)
-8. [Where things stand](#where-things-stand)
-9. [Known bugs and gaps](#known-bugs-and-gaps)
-10. [What's next](#whats-next)
-11. [Full roadmap](#full-roadmap)
-12. [Lessons learned so far](#lessons-learned-so-far)
+7. [How intervals and streaks work](#how-intervals-and-streaks-work)
+8. [Design decisions](#design-decisions)
+9. [Where things stand](#where-things-stand)
+10. [Known gaps](#known-gaps)
+11. [What's next](#whats-next)
+12. [Full roadmap](#full-roadmap)
+13. [Lessons learned so far](#lessons-learned-so-far)
 
 ---
 
 ## The idea
 
-Users sign in, create habits or to-dos, and check them off. Every check-off is saved with a date, which powers two numbers on each task:
+Users sign in, create tasks, and check them off. Each task has an **interval**: day, week, month, or year. Every check-off is saved with a date, and two numbers come out of that history:
 
-- **Dog length (streak):** how many days you showed up. Counts distinct days with at least one completion.
-- **Rep counter:** how many times you've done the task in total.
+- **Streak (dog length):** how many intervals in a row the task was done at least once. Miss an interval and the dog resets.
+- **Period count (number inside the dog):** how many times the task was done in the current interval.
 
-Consistency vs. volume. The dog measures the first, the counter measures the second.
+Both show up in the same view. "Brush teeth" (daily) might show a dog 12 segments long with a 2 inside: 12 days running, twice today. "Gym" (weekly) might show 5 and 3: 5 weeks running, three sessions this week.
+
+Every task works the same way, whatever its interval. It can be checked off as many times as you like, and every check-off counts.
 
 ### Requirements
 
@@ -56,7 +59,7 @@ Consistency vs. volume. The dog measures the first, the counter measures the sec
 | Containers | **Docker + docker-compose** | Phase 9 |
 | Hosting | Railway or Render | Phase 10 |
 
-Dev environment: Ubuntu 26, zsh, VS Code (Python, Pylance, Ruff extensions), Node v24 via nvm.
+Dev environment: Ubuntu 26, zsh, VS Code (Python, Pylance, Ruff extensions), Node v24 via nvm, sqlite3 CLI.
 
 ---
 
@@ -75,7 +78,8 @@ log-dog/
         ├── main.py           # FastAPI app and all endpoints
         ├── database.py       # engine, SessionLocal, Base, get_db()
         ├── models.py         # SQLAlchemy models: User, Task, Completion
-        └── schemas.py        # Pydantic schemas: TaskCreate, TaskRead, CompletionRead
+        ├── schemas.py        # Pydantic schemas: TaskCreate, TaskRead, CompletionRead, TaskStats
+        └── streaks.py        # interval definitions and streak math (no database code)
 ```
 
 A `frontend/` folder will sit next to `backend/` once Phase 6 starts. Everything stays in one repo.
@@ -102,19 +106,25 @@ Then open:
 
 Tables are created automatically on startup by `create_all()` in `main.py`.
 
-**Placeholder user:** until auth exists, every task is owned by `user_id=1`. If you start with a fresh database, create that user once from a Python shell inside `backend/` with the venv active:
+**Placeholder user:** until auth exists, every task is owned by `user_id=1`. With a fresh database, create that user once. Open a second terminal, `cd` into `backend/`, activate the venv, run `python`, and type these lines one at a time at the `>>>` prompt:
 
 ```python
 from app.database import SessionLocal
 from app import models
-
 db = SessionLocal()
 db.add(models.User(email="dustin@example.com", hashed_password="placeholder"))
 db.commit()
 db.close()
+exit()
 ```
 
+**Peeking at the database:** from `backend/`, run `sqlite3 logdog.db "SELECT * FROM completions;"`. Without the sqlite3 CLI, this works too: `python -c "import sqlite3; print(sqlite3.connect('logdog.db').execute('SELECT * FROM completions').fetchall())"`.
+
+**Changing a table:** `create_all()` only builds tables that don't exist yet. It never changes an existing one. After changing a model's columns, delete `logdog.db`, restart the server, and recreate the placeholder user.
+
 **zsh tip:** quote any package with brackets when installing, like `pip install "uvicorn[standard]"`, or zsh will try to treat the brackets as a file pattern.
+
+**apt tip:** if `apt install` fails with a 404, run `sudo apt update` first to refresh the package list.
 
 ---
 
@@ -128,15 +138,17 @@ users                    tasks                      completions
 id (PK)          ◄────   user_id (FK)               id (PK)
 email (unique)           id (PK)            ◄────   task_id (FK)
 hashed_password          title                      completed_date
-created_at               frequency_type             
+created_at               interval                   
                          created_at                 
 ```
 
 | Model | Notes |
 |---|---|
 | `User` | `tasks` relationship with `cascade="all, delete-orphan"`, so deleting a user cleans up their tasks |
-| `Task` | `frequency_type` is `"daily"` (default) or `"repeatable"`. `completions` relationship also cascades |
-| `Completion` | One row per check-off. Only stores the calendar date, not the time |
+| `Task` | `interval` is `"day"` (default), `"week"`, `"month"`, or `"year"`. `completions` relationship also cascades |
+| `Completion` | One row per check-off. Stores only the calendar date, set by `default=date.today` |
+
+**Counts and streaks are not stored anywhere.** They're calculated from the completion rows every time stats are requested. See [Design decisions](#design-decisions).
 
 Relationship strings like `relationship("User", back_populates="tasks")` must match the **class name** exactly (capital letters count), and `back_populates` names the attribute on the *other* class.
 
@@ -144,31 +156,87 @@ Relationship strings like `relationship("User", back_populates="tasks")` must ma
 
 ## API endpoints
 
-| Method | Path | Status | What it does |
-|---|---|---|---|
-| GET | `/` | ✅ Working | Confirms the API is running |
-| GET | `/health` | ✅ Working | Health check, used later by Docker and the host |
-| POST | `/tasks` | ✅ Working | Creates a task. Body: `{"title": "...", "frequency_type": "daily"}`. Returns 201 |
-| GET | `/tasks` | ✅ Working | Lists all tasks |
-| DELETE | `/tasks/{task_id}` | ❌ Crashes | Deletes a task, returns 204 or 404. Has a typo, see [Known bugs](#known-bugs-and-gaps) |
-| POST | `/tasks/{task_id}/complete` | ⬜ Not written | Logs a completion for today. Schema is ready, endpoint isn't |
-| GET | `/tasks/{task_id}/stats` | ⬜ Planned | Returns streak (dog length) and rep count |
+| Method | Path | What it does |
+|---|---|---|
+| GET | `/` | Confirms the API is running |
+| GET | `/health` | Health check, used later by Docker and the host |
+| POST | `/tasks` | Creates a task. Body: `{"title": "...", "interval": "week"}` (interval is optional, defaults to `"day"`). Returns 201, or 422 for an unknown interval |
+| GET | `/tasks` | Lists all tasks |
+| DELETE | `/tasks/{task_id}` | Deletes a task and its completions. Returns 204, or 404 if it doesn't exist |
+| POST | `/tasks/{task_id}/complete` | Logs a check-off for today. Returns 201 with the completion, or 404 |
+| GET | `/tasks/{task_id}/stats` | Returns `{"task_id", "streak", "period_count"}`, or 404 |
+
+All endpoints are tested and working in `/docs`.
+
+**Reading `/docs` responses:** "Server response" is what actually happened. The "Responses" section below it is auto-generated documentation of what the endpoint *could* return. FastAPI adds the 422 entry on its own because of the type hints, and it doesn't list 404s raised inside a function.
+
+---
+
+## How intervals and streaks work
+
+All the logic lives in `backend/app/streaks.py`, with no database code, so it's easy to test on its own.
+
+**Every interval comes down to one question: when does it start?** Each interval has a function that takes any date and returns the first day of the interval it falls in:
+
+| Interval | Start of the interval | Example for Fri Oct 16, 2026 |
+|---|---|---|
+| day | the date itself | Oct 16, 2026 |
+| week | that week's Monday | Oct 12, 2026 |
+| month | the 1st | Oct 1, 2026 |
+| year | Jan 1 | Jan 1, 2026 |
+
+Two dates are in the same interval if they have the same start date.
+
+**The `INTERVALS` dictionary** maps each name to its start function. It's the single place intervals are defined. The schema validator checks incoming tasks against its keys, and the streak math looks functions up in it.
+
+**Adding a new interval** (quarter, for example) takes two edits, both in `streaks.py`:
+
+```python
+def start_of_quarter(d: date) -> date:
+    first_month = 3 * ((d.month - 1) // 3) + 1
+    return d.replace(month=first_month, day=1)
+
+INTERVALS = {
+    ...
+    "quarter": start_of_quarter,
+}
+```
+
+That's it. Validation, the 422 error message, and the streak math all pick it up. Since `interval` is stored as plain text, no database change is needed either.
+
+**Stepping back one interval** works the same way for every interval: go back one day from the start of the current one, then snap to the start of whatever interval that lands in. That's why a new interval only needs a start function.
+
+**The streak calculation:**
+
+1. Turn every completion date into the start of its interval, and collect them in a set (`done_periods`).
+2. **Period count** = completions whose interval start matches the current interval's start.
+3. **Streak:** start at the current interval if it's been done, otherwise start at the previous one (the grace rule). Walk backward one interval at a time, adding 1, until hitting an interval that isn't in the set.
+
+**The grace rule:** the dog doesn't shrink until a whole interval goes by without a check-off. If you brushed your teeth yesterday and the day before, the dog still shows 2 this morning, before you've brushed. It only resets if all of today passes without a check-off.
 
 ---
 
 ## Design decisions
 
+**Every task behaves the same.** No caps, no task types. Any task can be checked off any number of times in its interval, and the only per-task setting is `interval`. (An earlier version had a `frequency_type` and then an `allow_multiple` flag that rejected repeat check-offs with a 409. Both were removed once the rule became "every check-off counts.")
+
+**Derived data, not stored counters.** There's no count column. The completions table is the single source of truth, and streaks and counts are calculated from it when needed. A stored counter would need a scheduled job to reset it every day, week, month, and year, and it could drift out of sync with the real history. If calculating ever gets slow, the fix is caching, not storing.
+
+**Database code in `main.py`, math in `streaks.py`.** The stats endpoint pulls the completion dates and hands them to `calculate_stats()`, which only knows about lists of dates. That keeps the math easy to read and easy to test without a database.
+
+**Weeks start on Monday.** That's the ISO standard and Python's default (`date.weekday()` returns 0 for Monday). To switch to Sunday, only `start_of_week` changes.
+
 **Models vs. schemas.** Models (`models.py`) describe the database. Schemas (`schemas.py`) describe what the API accepts and returns. They're kept separate on purpose, so things like `hashed_password` never leak out of the API and users can't pick their own IDs.
+
+**Validation in the schema.** `TaskCreate` uses a `field_validator` to check `interval` against `INTERVALS`. Bad input gets a 422 before any endpoint code runs.
 
 **One session per request.** `get_db()` in `database.py` hands every request a fresh session and always closes it afterward (the `try / finally`). Endpoints get it with `db: Session = Depends(get_db)`.
 
-**Daily vs. repeatable tasks.** Both write to the same `completions` table. The only difference is one rule at insert time: a daily task rejects a second completion on the same day. That rule lives in the endpoint code, not a database constraint, because a unique constraint on `(task_id, date)` would break repeatable tasks.
+**`default` vs. `server_default`.** `default=date.today` means Python fills in the value. `server_default` hands the value to the database as SQL, so it only accepts SQL like `func.now()`, never a Python function.
 
-**Streak definition.** Distinct days with at least one completion, no matter the task type. Doing a repeatable task 12 times in a day still grows the dog by one.
+**Timezones (on the radar).** "Today" uses the server's clock for now. Worth revisiting once real users exist, since a 9pm check-off in California can land on tomorrow in UTC.
 
-**Timezones (on the radar).** "Today" depends on where the user is. For now we use server time and accept it. Worth revisiting once real users exist, since a 9pm check-off in California can land on tomorrow in UTC.
-
-**`create_all()` for now, Alembic later.** `create_all()` builds missing tables but never changes existing ones. If a column changes, the quick fix in dev is deleting `logdog.db` and letting it rebuild. The proper fix is Alembic migrations, which we can add later.
+**`create_all()` for now, Alembic later.** Fine while the only data is test data. Once real data exists, Alembic migrations can change tables without deleting anything.
 
 **Pydantic v2 style.** Use `model_config = {"from_attributes": True}`, not the old v1 `class Config: orm_mode = True`. Also `.model_dump()` instead of `.dict()`. Lots of tutorials online still show v1.
 
@@ -176,7 +244,7 @@ Relationship strings like `relationship("User", back_populates="tasks")` must ma
 
 ## Where things stand
 
-**Current phase: 4 of 11 (Task CRUD API), about two-thirds done.**
+**Current phase: Phase 4 (Task CRUD API) is done. Phase 5 (User auth) is next.**
 
 | Phase | Status |
 |---|---|
@@ -184,8 +252,8 @@ Relationship strings like `relationship("User", back_populates="tasks")` must ma
 | 1. Git, GitHub, folder layout | ✅ Done |
 | 2. FastAPI skeleton | ✅ Done |
 | 3. Database layer | ✅ Done |
-| 4. Task CRUD API | 🟡 In progress |
-| 5. User auth | ⬜ |
+| 4. Task CRUD API | ✅ Done |
+| 5. User auth | ⬜ Next |
 | 6. Frontend skeleton | ⬜ |
 | 7. Connect frontend to backend | ⬜ |
 | 8. Dashboard and visualization | ⬜ |
@@ -193,90 +261,34 @@ Relationship strings like `relationship("User", back_populates="tasks")` must ma
 | 10. Deploy online | ⬜ |
 | 11. Polish | ⬜ |
 
-**Phase 4 checklist:**
+**Phase 4 recap:**
 
 - [x] `get_db()` session dependency
-- [x] `TaskCreate`, `TaskRead`, `CompletionRead` schemas
-- [x] `POST /tasks` (tested, returned 201)
-- [x] `GET /tasks`
-- [ ] Fix and test `DELETE /tasks/{task_id}`
-- [ ] Fix the `completed_date` default
-- [ ] Write and test `POST /tasks/{task_id}/complete`
-- [ ] Add the once-per-day rule for daily tasks
-- [ ] Add a stats endpoint (streak + rep count)
-- [ ] Commit and push
-
-**Git status:** the last commit is from July 2. Everything since then is **not committed**: changes to `database.py`, `main.py`, `models.py`, and the new `schemas.py`. GitHub currently shows an empty `models.py` and a `main.py` with only the two health endpoints.
-
-**Database contents:** one placeholder user (`dustin@example.com`) and one task (`walk the dog`, daily). No completions yet.
+- [x] Schemas for tasks, completions, and stats
+- [x] Create, list, and delete tasks (fixed a misplaced parenthesis in delete)
+- [x] Fixed the `completed_date` default (a full timestamp in a date column crashed on read)
+- [x] Completion endpoint
+- [x] Intervals: day, week, month, year, defined in one place
+- [x] Stats endpoint with streak and period count
 
 ---
 
-## Known bugs and gaps
+## Known gaps
 
-### 1. `DELETE /tasks/{task_id}` crashes with a 500
+These are all expected at this stage, and most are handled by later phases.
 
-In `main.py`, a parenthesis is in the wrong spot, so `.filter()` gets called on the model class instead of on the query:
-
-```python
-# current (broken)
-task = db.query(models.Task.filter(models.Task.id == task_id). first())
-
-# fixed
-task = db.query(models.Task).filter(models.Task.id == task_id).first()
-```
-
-The server still starts fine, because Python only runs that line when the endpoint is called. That's why it hasn't shown up yet.
-
-### 2. `completed_date` will crash the completion endpoint
-
-In `models.py`, `Completion.completed_date` uses `server_default=func.now()`. In SQLite that stores a full timestamp (`2026-10-16 22:44:42`) in a column declared as a `Date`, and SQLAlchemy throws a `ValueError` when it tries to read it back. Swap it for a Python-side default that gives a plain date:
-
-```python
-from datetime import date
-
-completed_date = Column(Date, nullable=False, default=date.today)
-```
-
-Note it's `date.today` without parentheses, so SQLAlchemy calls it fresh each time a row is added. Since the column itself isn't changing, no need to delete the database for this one.
-
-### 3. Small stuff
-
-- `database.py` has a typo in a variable name: `SQLALCHEMY_DATABAS_URL` (missing the E). It works because it's spelled the same way both times, but it's worth fixing.
-- `GET /tasks` returns every task in the database, not just the current user's. Expected for now, Phase 5 fixes it.
-- `POST /tasks` hardcodes `user_id=1`. Also Phase 5.
-- `frequency_type` accepts any string. Could be locked down to `"daily"` or `"repeatable"` with a `Literal` type in the schema.
+- `GET /tasks` returns every task in the database, not just the current user's. Phase 5.
+- `POST /tasks` hardcodes `user_id=1`. Phase 5.
+- No way to undo an accidental check-off. A `DELETE /completions/{id}` endpoint would cover it.
+- No way to edit a task's title or interval. A `PATCH /tasks/{task_id}` endpoint would cover it.
+- `database.py` has a typo in a variable name: `SQLALCHEMY_DATABAS_URL` (missing the E). It works because it's spelled the same both times, but it's worth fixing.
+- No automated tests yet. `calculate_stats()` is the best first candidate for pytest.
 
 ---
 
 ## What's next
 
-### Finish Phase 4
-
-1. **Fix the delete bug** (bug 1 above), then test it in `/docs`: delete a throwaway task and check you get a 204, then try a made-up ID and check you get a 404.
-2. **Fix `completed_date`** (bug 2 above).
-3. **Add the completion endpoint** to the bottom of `main.py`:
-
-   ```python
-   @app.post("/tasks/{task_id}/complete", response_model=schemas.CompletionRead, status_code=201)
-   def complete_task(task_id: int, db: Session = Depends(get_db)):
-       task = db.query(models.Task).filter(models.Task.id == task_id).first()
-       if task is None:
-           raise HTTPException(status_code=404, detail="Task not found")
-
-       completion = models.Completion(task_id=task.id)
-       db.add(completion)
-       db.commit()
-       db.refresh(completion)
-       return completion
-   ```
-
-   Test it on task 1 in `/docs`.
-4. **Add the daily rule.** Before creating the completion, if `task.frequency_type == "daily"` and a completion for this task already exists with today's date, reject it with a `409 Conflict`.
-5. **Add a stats endpoint** like `GET /tasks/{task_id}/stats` returning `{"streak_days": ..., "total_completions": ...}`. This is the data the dachshund will be drawn from.
-6. **Commit and push.** Good point to break it into a couple of commits, like "Add task CRUD and completion endpoints" and "Fix completion date default."
-
-### Then Phase 5: User auth
+### Phase 5: User auth
 
 - Install password hashing and JWT libraries
 - `POST /auth/register` and `POST /auth/login` endpoints
@@ -284,7 +296,13 @@ Note it's `date.today` without parentheses, so SQLAlchemy calls it fresh each ti
 - Issue a JWT token on login
 - A `get_current_user` dependency (same idea as `get_db`) that reads the token
 - Replace the hardcoded `user_id=1` and filter all task queries by the logged-in user
-- Make sure a user can't delete or complete someone else's task (return 404, not 403, so you don't reveal it exists)
+- Make sure a user can't delete, complete, or see stats for someone else's task (return 404, not 403, so you don't reveal it exists)
+
+### Nice to have before or during Phase 5
+
+- Undo a check-off (`DELETE /completions/{id}`)
+- Edit a task (`PATCH /tasks/{task_id}`)
+- First pytest tests for `streaks.py`
 
 ---
 
@@ -294,7 +312,7 @@ Note it's `date.today` without parentheses, so SQLAlchemy calls it fresh each ti
 1. **Version control.** Git, GitHub, one repo for frontend and backend.
 2. **Backend skeleton.** Minimal FastAPI app with a health check.
 3. **Database layer.** Schema design, SQLAlchemy models, SQLite.
-4. **Task CRUD API.** Create, list, delete, log completions.
+4. **Task CRUD API.** Create, list, delete, log completions, stats.
 5. **User auth.** Registration, login, password hashing, JWT, protected routes.
 6. **Frontend skeleton.** React + Vite, routing, login and dashboard pages.
 7. **Connect frontend to backend.** Auth flow in the UI, real task list, add and delete.
@@ -303,16 +321,21 @@ Note it's `date.today` without parentheses, so SQLAlchemy calls it fresh each ti
 10. **Deploy online.** Hosting, environment variables, basic CI/CD.
 11. **Polish.** Tests, error handling, final README.
 
-Possible extras along the way: an update endpoint (`PATCH /tasks/{task_id}` to rename a task), Alembic migrations, and moving routes out of `main.py` into separate router files once it gets crowded.
+Possible extras along the way: Alembic migrations, and moving routes out of `main.py` into separate router files once it gets crowded.
 
 ---
 
 ## Lessons learned so far
 
-- **Read the error before the code.** Python tracebacks name the file and line.
+- **Read the error before the code.** Python tracebacks name the file and line. Start at the bottom for the actual complaint, then find the last line that points at your own project.
 - **"Failed to locate a name" in SQLAlchemy** almost always means a typo or wrong capitalization in a `relationship()` string.
+- **`date` vs. `Date`:** lowercase `date` is Python's date class (`from datetime import date`). Capital `Date` is SQLAlchemy's column type. Different imports.
+- **`date.today` vs. `date.today()`:** without parentheses you're passing the function to be called later (a column default). With parentheses you're calling it right now to get today's date.
+- **Code inside a function only runs when the function is called.** A broken endpoint can sit there silently while the server starts fine.
 - **Moving a project folder breaks the venv**, since a venv stores absolute paths. Delete it and recreate it. Git history moves with the folder just fine.
 - **`Base`** collects table blueprints from every class that inherits from it, and `create_all()` builds them. That's why `main.py` has to import `models` even though it looks unused.
 - **A session** is a Python object holding a borrowed connection, a map of objects it's tracking, and an open transaction. `add()` stages, `commit()` saves, `close()` throws away anything uncommitted.
-- **Status codes matter:** 201 for created, 204 for deleted with nothing to return, 404 for not found, 409 for a conflict like a duplicate daily check-off.
+- **Status codes matter:** 201 for created, 204 for deleted with nothing to return, 404 for not found, 422 for invalid input.
+- **SQLite can reuse IDs.** Without AUTOINCREMENT, a new row gets the highest existing ID plus one, so deleting the newest row frees its ID.
+- **Functions are values.** They can be stored in a dictionary and looked up by name, which is how `INTERVALS` works.
 - **Commit early and often.** Two weeks of work sitting uncommitted is a lot to lose to one bad `rm`.

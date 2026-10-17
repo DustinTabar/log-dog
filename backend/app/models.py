@@ -1,10 +1,7 @@
-from sqlalchemy import Column, Integer, String, Date, DateTime, ForeignKey, func
+from sqlalchemy import Boolean, Column, Date, DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import relationship
-
 from app.database import Base
-
 from datetime import date
-
 
 
 class User(Base):
@@ -23,7 +20,7 @@ class Task(Base):
 
     id = Column(Integer, primary_key=True, index=True)
     title = Column(String, nullable=False)
-    frequency_type = Column(String, nullable=False, default="daily")
+    interval = Column(String, nullable=False, default="day")
     created_at = Column(DateTime(timezone=True), server_default=func.now())
 
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)

@@ -1,7 +1,5 @@
 from datetime import date, datetime
-
-from pydantic import BaseModel, field_validator
-
+from pydantic import BaseModel, Field, field_validator
 from app.streaks import INTERVALS
 
 
@@ -38,3 +36,21 @@ class TaskStats(BaseModel):
     task_id: int
     streak: int
     period_count: int
+
+
+class UserCreate(BaseModel):
+    email: str
+    password: str = Field(min_length=8)
+
+
+class UserRead(BaseModel):
+    id: int
+    email: str
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str

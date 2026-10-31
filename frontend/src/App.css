@@ -1,0 +1,62 @@
+main {
+  max-width: 480px;
+  margin: 0 auto;
+  padding: 24px 16px;
+}
+
+.task-card {
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  padding: 16px;
+  margin-bottom: 12px;
+}
+
+.task-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+}
+
+.task-header h2 {
+  margin: 0;
+}
+
+.interval {
+  color: #777;
+}
+
+.dog-row {
+  overflow-x: auto;
+  margin: 12px 0 4px;
+}
+
+.task-stats {
+  color: #555;
+  margin: 0 0 12px;
+}
+
+.task-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.auth-form input {
+  padding: 8px;
+  font-size: 16px;
+}
+
+.error {
+  color: #c62828;
+}

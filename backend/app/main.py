@@ -5,7 +5,7 @@ from datetime import date
 
 from app import models, schemas
 from app.security import create_access_token, hash_password, verify_password
-from app.streaks import calculate_stats
+from app.streaks import calculate_stats, period_start
 from app.database import engine, get_db
 from app.dependencies import get_current_user
 
@@ -124,6 +124,28 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
     return {"access_token": create_access_token(user.id), "token_type": "bearer"}
 
 ######################################################
+#                      PATCH                        #
+######################################################
+
+@app.patch("/tasks/{task_id}", response_model=schemas.TaskRead)
+def update_task(
+    task_id: int,
+    updates: schemas.TaskUpdate,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    task = get_owned_task(task_id, current_user, db)
+
+    if updates.title is not None:
+        task.title = updates.title
+    if updates.interval is not None:
+        task.interval = updates.interval
+
+    db.commit()
+    db.refresh(task)
+    return task
+
+######################################################
 #                      DELETE                        #
 ######################################################
 
@@ -135,5 +157,30 @@ def delete_task(
 ):
     task = get_owned_task(task_id, current_user, db)
     db.delete(task)
+    db.commit()
+    return None
+
+
+@app.delete("/tasks/{task_id}/completions/latest", status_code=204)
+def undo_latest_completion(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(get_current_user),
+):
+    task = get_owned_task(task_id, current_user, db)
+    current_start = period_start(date.today(), task.interval)
+
+    latest = db.query(models.Completion).filter(
+        models.Completion.task_id == task.id,
+        models.Completion.completed_date >= current_start,
+    ).order_by(
+        models.Completion.completed_date.desc(),
+        models.Completion.id.desc(),
+    ).first()
+
+    if latest is None:
+        raise HTTPException(status_code=404, detail=f"No check-offs to undo this {task.interval}")
+
+    db.delete(latest)
     db.commit()
     return None

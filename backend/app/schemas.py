@@ -3,6 +3,12 @@ from pydantic import BaseModel, Field, field_validator
 from app.streaks import INTERVALS
 
 
+def validate_interval(value: str) -> str:
+    if value not in INTERVALS:
+        raise ValueError(f"interval must be one of: {', '.join(INTERVALS)}")
+    return value
+
+
 class TaskCreate(BaseModel):
     title: str
     interval: str = "day"
@@ -10,9 +16,19 @@ class TaskCreate(BaseModel):
     @field_validator("interval")
     @classmethod
     def check_interval(cls, value: str) -> str:
-        if value not in INTERVALS:
-            raise ValueError(f"interval must be one of: {', '.join(INTERVALS)}")
-        return value
+        return validate_interval(value)
+
+
+class TaskUpdate(BaseModel):
+    title: str | None = None
+    interval: str | None = None
+
+    @field_validator("interval")
+    @classmethod
+    def check_interval(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        return validate_interval(value)
 
 
 class TaskRead(BaseModel):
